@@ -1,0 +1,8 @@
+# sbt related files + build results
+target/
+
+# eclipse files
+.cache
+.classpath
+.project
+.settings/
