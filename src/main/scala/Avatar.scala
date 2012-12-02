@@ -20,7 +20,7 @@ class Avatar(var posX: Double, var posY: Double, var rotation: Double) extends A
 	var rotateRight = false
 	var walkForward = false
 	var walkBackward = false
-	
+
 	def receive = {
 		case GlobalWorldTick(duration) => step(duration)
 		case AvatarCommands.MoveBackwardBegin => walkBackward = true
@@ -31,16 +31,24 @@ class Avatar(var posX: Double, var posY: Double, var rotation: Double) extends A
 		case AvatarCommands.RotateLeftEnd => rotateLeft = false
 		case AvatarCommands.RotateRightBegin => rotateRight = true
 		case AvatarCommands.RotateRightEnd => rotateRight = false
+		case showYourTile => sender ! new Tile(
+			x = posX,
+			y = posY,
+			z = 0,
+			h = 0.4,
+			w = 0.35,
+			r = rotation,
+			id = "foo")
 	}
-	
+
 	def step(duration: FiniteDuration) {
 		val seconds = duration.toMillis.toDouble / 1000
-		
+
 		if (rotateLeft) {
-			rotation -= seconds * 2 * math.Pi * rotatationSpeed
+			rotation += seconds * 2 * math.Pi * rotatationSpeed
 		}
 		if (rotateRight) {
-			rotation += seconds * 2 * math.Pi * rotatationSpeed
+			rotation -= seconds * 2 * math.Pi * rotatationSpeed
 		}
 		if (rotation >= 2 * math.Pi) {
 			rotation -= (rotation / (2 * math.Pi)).toInt * 2 * math.Pi
@@ -48,7 +56,7 @@ class Avatar(var posX: Double, var posY: Double, var rotation: Double) extends A
 		if (rotation < 0) {
 			rotation -= (rotation / (2 * math.Pi) - 1).toInt * 2 * math.Pi
 		}
-		
+
 		if (walkForward) {
 			posX += seconds * walkSpeed * Math.cos(rotation)
 			posY += seconds * walkSpeed * Math.sin(rotation)
@@ -57,7 +65,7 @@ class Avatar(var posX: Double, var posY: Double, var rotation: Double) extends A
 			posX -= seconds * walkSpeed * Math.cos(rotation)
 			posY -= seconds * walkSpeed * Math.sin(rotation)
 		}
-		
+
 		println(s"x=${posX} y=${posY} r=${rotation}")
 	}
 }

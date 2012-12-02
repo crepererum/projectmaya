@@ -36,7 +36,7 @@ class Input extends Actor {
 		schedulerCancellable = Some(context.system.scheduler.schedule(100.milliseconds, 50.milliseconds, self, Tick))
 
 	}
-	
+
 	override def postStop() {
 		// unload scheduler
 		schedulerCancellable match {
