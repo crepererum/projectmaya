@@ -2,13 +2,21 @@ import akka.actor.Actor
 import akka.actor.ActorPath
 import akka.actor.Cancellable
 
+import de.matthiasmann.twl.utils.PNGDecoder
+
+import java.nio.ByteBuffer
+
 import org.lwjgl.BufferUtils
+import org.lwjgl.opengl.ContextAttribs
 import org.lwjgl.opengl.Display
 import org.lwjgl.opengl.DisplayMode
 import org.lwjgl.opengl.GL11._
+import org.lwjgl.opengl.GL13._
 import org.lwjgl.opengl.GL15._
 import org.lwjgl.opengl.GL20._
 import org.lwjgl.opengl.GL30._
+import org.lwjgl.opengl.PixelFormat
+import org.lwjgl.util.glu.GLU._
 import org.lwjgl.util.vector.Matrix4f
 import org.lwjgl.util.vector.Vector2f
 import org.lwjgl.util.vector.Vector3f
@@ -20,17 +28,21 @@ import scala.io.Source
 case object showYourTile
 
 case class Tile(x: Double, y: Double, z: Integer, r: Double, h: Double, w: Double, id: String)
+case object RemoveTile
 
 class Gui extends Actor {
 	val Tick = "tick"
+	val textures = HashMap.empty[String, Integer]
 	val tiles = HashMap.empty[ActorPath, Tile]
 	val dimHeight = 600
 	val dimWidh = 800
 	val projectionMatrix = buildProjectionMatrix
 	var schedulerCancellable: Option[Cancellable] = None
-	var pId = 0
+	var programId = 0
 	var shaderFragmentId = 0
 	var shaderVertexId = 0
+	var uniformIdMatrix = -1
+	var uniformIdTexture = -1
 	var vertexArrayId = 0
 	var vertexBufferId = 0
 
@@ -44,15 +56,45 @@ class Gui extends Actor {
 			}
 		}
 		case tile: Tile => {
-			tiles += (sender.path -> tile)
+			try {
+				if (!textures.contains(tile.id)) {
+					textures += (tile.id -> loadPNGTexture(tile.id))
+				}
+
+				tiles += (sender.path -> tile)
+			} catch {
+				case e: IllegalArgumentException => {
+					val dummyTile = tile.copy(id = "dummy")
+
+					if (!textures.contains(dummyTile.id)) {
+						textures += (dummyTile.id -> loadPNGTexture(dummyTile.id))
+					}
+
+					tiles += (sender.path -> dummyTile)
+				}
+			}
+		}
+		case RemoveTile => {
+			tiles -= sender.path
 		}
 	}
 
 	override def preStart() {
+		// OpenGL pixel format
+		val pixelFormat = new PixelFormat
+
+		// OpenGL context
+		val contextAttribs = new ContextAttribs(3, 0)
+		contextAttribs.withForwardCompatible(true)
+
 		// init OpenGL
 		Display.setDisplayMode(new DisplayMode(dimWidh, dimHeight))
 		Display.setTitle("Project Maya")
-		Display.create()
+		Display.create(pixelFormat, contextAttribs)
+
+		// enable some stuff
+		glEnable(GL_BLEND)
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
 		// set viewport
 		glViewport(0, 0, dimWidh, dimHeight)
@@ -81,11 +123,15 @@ class Gui extends Actor {
 		// setup shader
 		shaderVertexId = loadShader("vertex", GL_VERTEX_SHADER)
 		shaderFragmentId = loadShader("fragment", GL_FRAGMENT_SHADER)
-		pId = glCreateProgram()
-		glAttachShader(pId, shaderVertexId)
-		glAttachShader(pId, shaderFragmentId)
-		glLinkProgram(pId)
-		glValidateProgram(pId)
+		programId = glCreateProgram()
+		glAttachShader(programId, shaderVertexId)
+		glAttachShader(programId, shaderFragmentId)
+		glLinkProgram(programId)
+		glValidateProgram(programId)
+		uniformIdMatrix = glGetUniformLocation(programId, "MVP")
+		uniformIdTexture = glGetUniformLocation(programId, "myTextureSampler")
+
+		checkGLError
 
 		// setup ticks
 		val sys = context.system
@@ -109,11 +155,13 @@ class Gui extends Actor {
 		glDeleteVertexArrays(vertexArrayId)
 
 		glUseProgram(0)
-		glDetachShader(pId, shaderVertexId)
-		glDetachShader(pId, shaderFragmentId)
+		glDetachShader(programId, shaderVertexId)
+		glDetachShader(programId, shaderFragmentId)
 		glDeleteShader(shaderVertexId)
 		glDeleteShader(shaderFragmentId)
-		glDeleteProgram(pId)
+		glDeleteProgram(programId)
+
+		textures foreach (x => glDeleteTextures(x._2))
 
 		// shutdown OpenGL
 		Display.destroy()
@@ -124,11 +172,13 @@ class Gui extends Actor {
 
 		tiles.foreach(x => drawTile(x._2))
 
+		checkGLError
+
 		Display.update()
 	}
 
 	def drawTile(tile: Tile) {
-		glUseProgram(pId)
+		glUseProgram(programId)
 
 		// prepare matrix
 		val modelMatrix = new Matrix4f()
@@ -142,7 +192,12 @@ class Gui extends Actor {
 		val matrixBuffer = BufferUtils.createFloatBuffer(16)
 		mvp.store(matrixBuffer)
 		matrixBuffer.flip()
-		glUniformMatrix4(0, false, matrixBuffer)
+		glUniformMatrix4(uniformIdMatrix, false, matrixBuffer)
+
+		// prepare texture (can raise exception!)
+		glActiveTexture(GL_TEXTURE0)
+		glBindTexture(GL_TEXTURE_2D, textures(tile.id))
+		glUniform1i(uniformIdTexture, 0)
 
 		// draw
 		glEnableVertexAttribArray(0)
@@ -168,6 +223,38 @@ class Gui extends Actor {
 		shaderID
 	}
 
+	def loadPNGTexture(name: String): Integer = {
+		val in = getClass.getResourceAsStream(s"/tiles/$name.png")
+		if (in == null) {
+			throw new IllegalArgumentException(s"tile '$name' not found!")
+		}
+
+		val decoder = new PNGDecoder(in)
+
+		val width = decoder.getWidth()
+		val height = decoder.getHeight()
+
+		val buf = ByteBuffer.allocateDirect(4 * width * height)
+		decoder.decode(buf, width * 4, PNGDecoder.Format.RGBA)
+		buf.flip()
+
+		in.close()
+
+		val textureId = glGenTextures()
+		glBindTexture(GL_TEXTURE_2D, textureId)
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf)
+
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+
+		checkGLError
+
+		textureId
+	}
+
 	def buildProjectionMatrix(): Matrix4f = {
 		val matrix = new Matrix4f
 		val scale = 40
@@ -177,5 +264,12 @@ class Gui extends Actor {
 		matrix.m11 = 2 / dimHeight.floatValue * scale
 
 		matrix
+	}
+
+	def checkGLError {
+		glGetError() match {
+			case GL_NO_ERROR => None
+			case i => throw new RuntimeException(s"glError: ${gluErrorString(i)}")
+		}
 	}
 }
