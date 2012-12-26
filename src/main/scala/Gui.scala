@@ -7,6 +7,7 @@ import de.matthiasmann.twl.utils.PNGDecoder
 import java.nio.ByteBuffer
 
 import org.lwjgl.BufferUtils
+import org.lwjgl.LWJGLException
 import org.lwjgl.opengl.ContextAttribs
 import org.lwjgl.opengl.Display
 import org.lwjgl.opengl.DisplayMode
@@ -27,7 +28,7 @@ import scala.io.Source
 
 case object showYourTile
 
-case class Tile(x: Double, y: Double, z: Integer, r: Double, h: Double, w: Double, id: String)
+case class Tile(pos: Position, z: Integer, r: Double, h: Double, w: Double, id: String)
 case object RemoveTile
 
 class Gui extends Actor {
@@ -52,7 +53,7 @@ class Gui extends Actor {
 				context.system.shutdown
 			} else {
 				redraw
-				context.actorSelection("../World/*") ! showYourTile
+				context.actorSelection("../../World/*") ! showYourTile
 			}
 		}
 		case tile: Tile => {
@@ -80,9 +81,6 @@ class Gui extends Actor {
 	}
 
 	override def preStart() {
-		// OpenGL pixel format
-		val pixelFormat = new PixelFormat
-
 		// OpenGL context
 		val contextAttribs = new ContextAttribs(3, 0)
 		contextAttribs.withForwardCompatible(true)
@@ -90,7 +88,13 @@ class Gui extends Actor {
 		// init OpenGL
 		Display.setDisplayMode(new DisplayMode(dimWidh, dimHeight))
 		Display.setTitle("Project Maya")
-		Display.create(pixelFormat, contextAttribs)
+
+		// try mulisample format
+		try {
+			Display.create(new PixelFormat withSamples (8), contextAttribs)
+		} catch {
+			case e: LWJGLException => Display.create(new PixelFormat, contextAttribs)
+		}
 
 		// enable some stuff
 		glEnable(GL_BLEND)
@@ -182,7 +186,7 @@ class Gui extends Actor {
 
 		// prepare matrix
 		val modelMatrix = new Matrix4f()
-		modelMatrix.translate(new Vector2f(tile.x.floatValue, tile.y.floatValue))
+		modelMatrix.translate(new Vector2f(tile.pos.x.floatValue, tile.pos.y.floatValue))
 		modelMatrix.scale(new Vector3f(tile.w.floatValue, tile.h.floatValue, 1))
 		modelMatrix.rotate(tile.r.floatValue, new Vector3f(0, 0, 1))
 
@@ -248,7 +252,8 @@ class Gui extends Actor {
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
 
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+		glGenerateMipmap(GL_TEXTURE_2D)
 
 		checkGLError
 
@@ -257,7 +262,7 @@ class Gui extends Actor {
 
 	def buildProjectionMatrix(): Matrix4f = {
 		val matrix = new Matrix4f
-		val scale = 40
+		val scale = 50
 
 		matrix.setIdentity()
 		matrix.m00 = 2 / dimWidh.floatValue * scale

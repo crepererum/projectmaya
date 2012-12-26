@@ -8,7 +8,7 @@ import scala.concurrent.duration._
 class Input extends Actor {
 	val Tick = "tick"
 	var schedulerCancellable: Option[Cancellable] = None
-	val playerActor = context.actorFor("../World/Player")
+	val playerActor = context.actorFor("../../World/Player")
 
 	def receive = {
 		case Tick => {

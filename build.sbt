@@ -2,12 +2,12 @@ name := "ProjectMaya"
 
 version := "Day0"
 
-scalaVersion := "2.10.0-RC2"
+scalaVersion := "2.10.0-RC5"
 
 resolvers += "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/"
 
 libraryDependencies ++= List(
-	"com.typesafe.akka" %% "akka-actor" % "2.1.0-RC2" cross CrossVersion.full,
+	"com.typesafe.akka" %% "akka-actor" % "2.1.0",
 	"org.lwjgl.lwjgl" % "lwjgl" % "2.8.5"
 )
 

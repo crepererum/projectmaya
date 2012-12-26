@@ -10,7 +10,7 @@ class World extends Actor {
 	val Tick = "tick"
 	val tickLength = 50.milliseconds
 	var schedulerCancellable: Option[Cancellable] = None
-	val playerActor = context.actorOf(Props(new Avatar(0, 0, 0)), name = "Player")
+	val playerActor = context.actorOf(Props(new Avatar(Position(0, 0), 0)), name = "Player")
 
 	def receive = {
 		case Tick => {
