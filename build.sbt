@@ -15,9 +15,17 @@ LWJGLPlugin.lwjglSettings ++ Seq(
 	LWJGLPlugin.lwjgl.version := "2.8.5"
 )
 
+javacOptions ++= Seq(
+	"-source",
+	"1.7",
+	"-target",
+	"1.7"
+)
+
 scalacOptions ++= Seq(
 	"-deprecation",
 	"-feature",
 	"-optimize",
+	"-target:jvm-1.7",
 	"-unchecked"
 )

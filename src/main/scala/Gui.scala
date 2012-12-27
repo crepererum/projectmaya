@@ -26,15 +26,10 @@ import scala.collection.mutable.HashMap
 import scala.concurrent.duration._
 import scala.io.Source
 
-case object showYourTile
-
-case class Tile(pos: Position, z: Integer, r: Double, h: Double, w: Double, id: String)
-case object RemoveTile
-
 class Gui extends Actor {
 	val Tick = "tick"
 	val textures = HashMap.empty[String, Integer]
-	val tiles = HashMap.empty[ActorPath, Tile]
+	val commands = HashMap.empty[ActorPath, DrawCommand]
 	val dimHeight = 600
 	val dimWidh = 800
 	val projectionMatrix = buildProjectionMatrix
@@ -53,30 +48,15 @@ class Gui extends Actor {
 				context.system.shutdown
 			} else {
 				redraw
-				context.actorSelection("../../World/*") ! showYourTile
+				context.actorSelection("../../World/*") ! CreateYourDrawCommand
 			}
 		}
-		case tile: Tile => {
-			try {
-				if (!textures.contains(tile.id)) {
-					textures += (tile.id -> loadPNGTexture(tile.id))
-				}
-
-				tiles += (sender.path -> tile)
-			} catch {
-				case e: IllegalArgumentException => {
-					val dummyTile = tile.copy(id = "dummy")
-
-					if (!textures.contains(dummyTile.id)) {
-						textures += (dummyTile.id -> loadPNGTexture(dummyTile.id))
-					}
-
-					tiles += (sender.path -> dummyTile)
-				}
-			}
+		case command: DrawCommand => {
+			searchForTiles(command.root)
+			commands += (sender.path -> command)
 		}
-		case RemoveTile => {
-			tiles -= sender.path
+		case RemoveDrawCommand => {
+			commands -= sender.path
 		}
 	}
 
@@ -171,48 +151,75 @@ class Gui extends Actor {
 		Display.destroy()
 	}
 
+	def searchForTiles(node: DrawNode) {
+		node match {
+			case Collection(chields) => chields foreach (chield => searchForTiles(chield))
+			case Transform(chield, _, _, _, _, _) => searchForTiles(chield)
+			case Tile(id) => {
+				try {
+					if (!textures.contains(id)) {
+						textures += (id -> loadPNGTexture(id))
+					}
+				} catch {
+					case e: IllegalArgumentException => {
+						textures += (id -> loadPNGTexture("dummy"))
+					}
+				}
+			}
+		}
+	}
+
 	def redraw() {
 		glClear(GL_COLOR_BUFFER_BIT)
 
-		tiles.foreach(x => drawTile(x._2))
+		commands.map(x => x._2).toSeq.sortBy(x => x.z).foreach(x => executeNode(x.root, projectionMatrix))
 
 		checkGLError
 
 		Display.update()
 	}
 
-	def drawTile(tile: Tile) {
-		glUseProgram(programId)
+	def executeNode(node: DrawNode, matrix: Matrix4f) {
+		node match {
+			case Collection(chields) => chields foreach (chield => executeNode(chield, matrix))
+			case Transform(chield, x, y, r, h, w) => {
+				val nodeMatrix = new Matrix4f()
+				nodeMatrix.translate(new Vector2f(x.floatValue, y.floatValue))
+				nodeMatrix.scale(new Vector3f(w.floatValue, h.floatValue, 1))
+				nodeMatrix.rotate(r.floatValue, new Vector3f(0, 0, 1))
 
-		// prepare matrix
-		val modelMatrix = new Matrix4f()
-		modelMatrix.translate(new Vector2f(tile.pos.x.floatValue, tile.pos.y.floatValue))
-		modelMatrix.scale(new Vector3f(tile.w.floatValue, tile.h.floatValue, 1))
-		modelMatrix.rotate(tile.r.floatValue, new Vector3f(0, 0, 1))
+				val chieldMatrix = new Matrix4f()
+				Matrix4f.mul(matrix, nodeMatrix, chieldMatrix)
 
-		val mvp = buildProjectionMatrix
-		Matrix4f.mul(projectionMatrix, modelMatrix, mvp)
+				executeNode(chield, chieldMatrix)
+			}
+			case Tile(id) => {
+				glUseProgram(programId)
 
-		val matrixBuffer = BufferUtils.createFloatBuffer(16)
-		mvp.store(matrixBuffer)
-		matrixBuffer.flip()
-		glUniformMatrix4(uniformIdMatrix, false, matrixBuffer)
+				// prepare matrix
+				val matrixBuffer = BufferUtils.createFloatBuffer(16)
+				matrix.store(matrixBuffer)
+				matrixBuffer.flip()
+				glUniformMatrix4(uniformIdMatrix, false, matrixBuffer)
 
-		// prepare texture (can raise exception!)
-		glActiveTexture(GL_TEXTURE0)
-		glBindTexture(GL_TEXTURE_2D, textures(tile.id))
-		glUniform1i(uniformIdTexture, 0)
+				// prepare texture (can raise exception!)
+				glActiveTexture(GL_TEXTURE0)
+				glBindTexture(GL_TEXTURE_2D, textures(id))
+				glUniform1i(uniformIdTexture, 0)
 
-		// draw
-		glEnableVertexAttribArray(0)
-		glBindBuffer(GL_ARRAY_BUFFER, vertexBufferId)
-		glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0)
+				// draw
+				glEnableVertexAttribArray(0)
+				glBindBuffer(GL_ARRAY_BUFFER, vertexBufferId)
+				glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0)
 
-		glDrawArrays(GL_TRIANGLES, 0, 6)
+				glDrawArrays(GL_TRIANGLES, 0, 6)
 
-		// clean up
-		glDisableVertexAttribArray(0)
-		glUseProgram(0)
+				// clean up
+				glDisableVertexAttribArray(0)
+				glUseProgram(0)
+				checkGLError
+			}
+		}
 	}
 
 	def loadShader(name: String, stype: Integer): Integer = {

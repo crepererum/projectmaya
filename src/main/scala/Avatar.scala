@@ -33,13 +33,15 @@ class Avatar(var pos: Position, var rotation: Double) extends Actor {
 		case AvatarCommands.RotateLeftEnd => rotateLeft = false
 		case AvatarCommands.RotateRightBegin => rotateRight = true
 		case AvatarCommands.RotateRightEnd => rotateRight = false
-		case showYourTile => sender ! new Tile(
-			pos = pos,
+		case showYourTile => sender ! new DrawCommand(
 			z = 0,
-			h = 0.4,
-			w = 0.35,
-			r = rotation,
-			id = "foo")
+			root = new Transform(
+				x = pos.x,
+				y = pos.y,
+				h = 0.4,
+				w = 0.35,
+				r = rotation,
+				chield = new Tile(id = "foo")))
 	}
 
 	def step(duration: FiniteDuration) {
