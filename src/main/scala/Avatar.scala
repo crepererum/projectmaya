@@ -41,7 +41,7 @@ class Avatar(var pos: Position, var rotation: Double) extends Actor {
 				h = 0.4,
 				w = 0.35,
 				r = rotation,
-				chield = new Tile(id = "foo")))
+				child = new Tile(id = "foo")))
 	}
 
 	def step(duration: FiniteDuration) {

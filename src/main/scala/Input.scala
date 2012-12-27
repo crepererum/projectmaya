@@ -1,14 +1,12 @@
 import akka.actor.Actor
-import akka.actor.Cancellable
 
 import org.lwjgl.input.Keyboard
 
 import scala.concurrent.duration._
 
 class Input extends Actor {
-	val Tick = "tick"
-	var schedulerCancellable: Option[Cancellable] = None
 	val playerActor = context.actorFor("../../World/Player")
+	val timerActor = context.actorFor("../../Timer")
 
 	def receive = {
 		case Tick => {
@@ -30,18 +28,10 @@ class Input extends Actor {
 	}
 
 	override def preStart() {
-		// setup ticks
-		val sys = context.system
-		import sys.dispatcher
-		schedulerCancellable = Some(context.system.scheduler.schedule(100.milliseconds, 50.milliseconds, self, Tick))
-
+		timerActor ! ScheduleTicks(100.milliseconds, 50.milliseconds)
 	}
 
 	override def postStop() {
-		// unload scheduler
-		schedulerCancellable match {
-			case Some(cancellable) => cancellable.cancel
-			case None => None
-		}
+		timerActor ! StopTicks
 	}
 }

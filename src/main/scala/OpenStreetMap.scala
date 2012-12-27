@@ -1,5 +1,5 @@
 import akka.actor.Actor
-import akka.actor.Cancellable
+import akka.actor.Props
 import akka.pattern.ask
 import akka.util.Timeout
 
@@ -17,13 +17,13 @@ import scala.xml.XML
 class OpenStreetMap extends Actor {
 	case class FetchSector(x: Integer, y: Integer)
 
-	val SECTOR_SIZE = 200
+	val SECTOR_SIZE = 100
 	val SECTOR_PRECISION = 8
-	val Tick = "tick"
-	var schedulerCancellable: Option[Cancellable] = None
+	val worldActor = context.actorFor("../../World")
 	val playerActor = context.actorFor("../../World/Player")
+	val timerActor = context.actorFor("../../Timer")
 	val fetchedSectors = HashSet.empty[(Integer, Integer)]
-	val root = GeoLocation(8.4042, 49.0109)
+	val root = GeoLocation(latitude = 49.0109, longitude = 8.4042)
 	val nodes = HashMap.empty[Integer, Position]
 
 	def receive = {
@@ -44,10 +44,10 @@ class OpenStreetMap extends Actor {
 			if (!fetchedSectors.contains((x, y))) {
 				val geoBegin = GeoLocation.fromXY(Position(x * SECTOR_SIZE, y * SECTOR_SIZE), root)
 				val geoEnd = GeoLocation.fromXY(Position((x + 1) * SECTOR_SIZE, (y + 1) * SECTOR_SIZE), root)
-				val urlString = s"http://api.openstreetmap.org/api/0.6/map?bbox=${sectorCoordString(geoBegin.latitude)},${sectorCoordString(geoBegin.longitude)},${sectorCoordString(geoEnd.latitude)},${sectorCoordString(geoEnd.longitude)}"
+				val urlString = s"http://api.openstreetmap.org/api/0.6/map?bbox=${sectorCoordString(geoBegin.longitude)},${sectorCoordString(geoBegin.latitude)},${sectorCoordString(geoEnd.longitude)},${sectorCoordString(geoEnd.latitude)}"
 				val xml = XML.load(new URL(urlString))
 
-				parseXML(xml)
+				parseXML(xml, s"${x}_${y}")
 
 				fetchedSectors += ((x, y))
 			}
@@ -55,22 +55,14 @@ class OpenStreetMap extends Actor {
 	}
 
 	override def preStart() {
-		// setup ticks
-		val sys = context.system
-		import sys.dispatcher
-		schedulerCancellable = Some(context.system.scheduler.schedule(0.milliseconds, 100.milliseconds, self, Tick))
-
+		timerActor ! ScheduleTicks(0.milliseconds, 100.milliseconds)
 	}
 
 	override def postStop() {
-		// unload scheduler
-		schedulerCancellable match {
-			case Some(cancellable) => cancellable.cancel
-			case None => None
-		}
+		timerActor ! StopTicks
 	}
 
-	def parseXML(xml: Elem) {
+	def parseXML(xml: Elem, sectorId: String) {
 		scala.xml.Utility.trim(xml) match {
 			case <osm>{ rootElements @ _* }</osm> => rootElements.foreach(rootElement => rootElement match {
 				case <bounds>{ boundsParams @ _* }</bounds> => Unit // ignore
@@ -80,11 +72,18 @@ class OpenStreetMap extends Actor {
 					val lon = (rootElement \ "@lon").text.toDouble
 
 					if (!nodes.contains(id)) {
-						val geoLoc = new GeoLocation(lat, lon)
+						val geoLoc = new GeoLocation(latitude = lat, longitude = lon)
 						nodes += (id -> geoLoc.toXY(root))
 					}
 				}
-				case <way>{ wayParams @ _* }</way> => Unit // ignore
+				case <way>{ wayParams @ _* }</way> => {
+					val points = wayParams
+						.filter(wayParam => wayParam.label == "nd")
+						.map(nd => (nd \ "@ref").text.toInt.asInstanceOf[Integer])
+						.map(refId => nodes(refId))
+					val id = s"way_${sectorId}_${(rootElement \ "@id").text}"
+					worldActor ! CreateNewObject(Props(new Way(points)), id)
+				}
 				case <relation>{ relationParams @ _* }</relation> => Unit // ignore
 				case _ => println(s"Ignore element ${rootElement.label}")
 			})
