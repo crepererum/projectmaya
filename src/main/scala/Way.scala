@@ -3,7 +3,8 @@ import akka.actor.Actor
 class Way(points: Seq[Position]) extends Actor {
 	val EPSILON = 0.01
 	val partSize = 0.5
-	val width = 1
+	val pointSize = 1
+	val width = 0.8
 	var drawCommandCreated = false
 
 	def receive = {
@@ -19,12 +20,7 @@ class Way(points: Seq[Position]) extends Actor {
 					val sx = dx / n
 					val sy = dy / n
 
-					val r =
-						if (math.abs(sx) < EPSILON) (math.Pi / 2.0 * math.signum(sy))
-						else if (sx > 0) math.atan(sy / sx)
-						else if (math.abs(sy) < EPSILON) math.Pi
-						else if (sy > 0) (math.Pi / 2 + math.atan(-sx / sy))
-						else (-math.Pi / 2 - math.atan(sx / sy))
+					val r = MathUtils.restoreAngle(sx, sy, EPSILON, true)
 
 					(0 to n).toSeq.map(i => {
 						val x = p._1.x + i * sx
@@ -33,7 +29,7 @@ class Way(points: Seq[Position]) extends Actor {
 					})
 				}).flatten
 
-				val pointCommands = points.map(point => Transform(x = point.x, y = point.y, h = width, w = width, child = Tile("way_point")))
+				val pointCommands = points.map(point => Transform(x = point.x, y = point.y, h = pointSize, w = pointSize, child = Tile("way_point")))
 				sender ! DrawCommand(z = -1, root = Collection(children = List(Collection(partsCommands), Collection(pointCommands))))
 				drawCommandCreated = true
 			}

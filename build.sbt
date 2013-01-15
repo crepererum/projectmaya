@@ -2,7 +2,7 @@ name := "ProjectMaya"
 
 version := "Day0"
 
-scalaVersion := "2.10.0-RC5"
+scalaVersion := "2.10.0"
 
 resolvers += "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/"
 

@@ -9,7 +9,7 @@ case class CreateNewObject(props: Props, id: String)
 class World extends Actor {
 	val tickLength = 50.milliseconds
 	val timerActor = context.actorFor("../Timer")
-	val playerActor = context.actorOf(Props(new Avatar(Position(0, 0), 0)), name = "Player")
+	val playerActor = context.actorOf(Props(new Avatar(Position(0, 0), new Rotation(0))), name = "Player")
 
 	def receive = {
 		case Tick => {

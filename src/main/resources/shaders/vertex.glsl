@@ -10,5 +10,5 @@ void main() {
     gl_Position = MVP * vec4(vertexPosition_modelspace,1);
 
     // relocate UV coords
-    UV = vec4(vertexPosition_modelspace,1).xy + vec2(0.5,0.5);
+    UV = vec2(vertexPosition_modelspace.x + 0.5, -vertexPosition_modelspace.y + 0.5);
 }

@@ -1,5 +1,6 @@
 import akka.actor.Actor
 import akka.actor.ActorPath
+import akka.actor.Props
 
 import de.matthiasmann.twl.utils.PNGDecoder
 
@@ -28,14 +29,12 @@ import scala.io.Source
 
 class Gui extends Actor {
 	val timerActor = context.actorFor("../../Timer")
+	val playerActor = context.actorFor("../../World/Player")
 	val textures = HashMap.empty[String, Integer]
 	val commands = HashMap.empty[ActorPath, DrawCommand]
-	val scheduledCommands = HashMap.empty[ActorPath, DrawCommand]
+	var scheduledCommands = HashMap.empty[ActorPath, DrawCommand]
 	val dimHeight = 600
 	val dimWidth = 800
-	val testRadius = 1.5f
-	val projectionMatrix = buildProjectionMatrix
-	val viewTestMatrix = buildViewTestMatrix
 	var programId = 0
 	var shaderFragmentId = 0
 	var shaderVertexId = 0
@@ -44,6 +43,10 @@ class Gui extends Actor {
 	var vertexArrayId = 0
 	var vertexBufferId = 0
 	var tickRound = 0
+	var playerPosition = Position(0, 0)
+	var playerRotation = new Rotation(0)
+	var guiMatrix = buildGuiMatrix
+	val testerActor = context.actorOf(Props(new ViewTester(guiMatrix)), name = "ViewTester")
 
 	def receive = {
 		case Tick => {
@@ -51,32 +54,23 @@ class Gui extends Actor {
 				context.system.shutdown
 			} else {
 				if (tickRound == 0) {
-					scheduledCommands.empty
-					scheduledCommands ++= commands
-						.map(x => (x._1, x._2.z, traverseAndTest(x._2.root, projectionMatrix)))
-						.filter(x => x._3.isDefined)
-						.map(x => (x._1, DrawCommand(z = x._2, root = x._3.get)))
+					testerActor ! ViewTesterCommands.TestAll(commands)
 				}
 
 				redraw
 
 				context.actorSelection("../../World/*") ! CreateYourDrawCommand
+				playerActor ! AvatarCommands.GetPosition
+				playerActor ! AvatarCommands.GetRotation
 
 				tickRound = (tickRound + 1) % 20
 			}
 		}
 		case command: DrawCommand => {
-			if (scheduledCommands.contains(sender.path)) {
-				scheduledCommands -= sender.path
-			}
-
 			traverseAndLoad(command.root)
 			commands += (sender.path -> command)
 
-			traverseAndTest(command.root, projectionMatrix) match {
-				case Some(node) => scheduledCommands += (sender.path -> command.copy(root = node))
-				case None => Unit // do not add
-			}
+			testerActor ! ViewTesterCommands.TestOne(sender.path, command)
 		}
 		case RemoveDrawCommand => {
 			if (commands.contains(sender.path)) {
@@ -84,6 +78,30 @@ class Gui extends Actor {
 				if (scheduledCommands.contains(sender.path)) {
 					scheduledCommands -= sender.path
 				}
+			}
+			testerActor ! ViewTesterCommands.DeleteOne(sender.path)
+		}
+		case pos: Position => {
+			playerPosition = pos
+			guiMatrix = buildGuiMatrix
+			testerActor ! ViewTesterCommands.ChangeGuiMatrix(guiMatrix)
+		}
+		case rot: Rotation => {
+			playerRotation = rot
+			guiMatrix = buildGuiMatrix
+			testerActor ! ViewTesterCommands.ChangeGuiMatrix(guiMatrix)
+		}
+		case ViewTesterCommands.DeleteOneResult(path) => {
+			if (scheduledCommands.contains(path)) {
+				scheduledCommands -= path
+			}
+		}
+		case ViewTesterCommands.TestAllResult(all) => {
+			scheduledCommands = all.filter(x => commands.contains(x._1))
+		}
+		case ViewTesterCommands.TestOneResult(path, command) => {
+			if (commands.contains(path)) {
+				scheduledCommands += (path -> command)
 			}
 		}
 	}
@@ -176,23 +194,11 @@ class Gui extends Actor {
 	def redraw() {
 		glClear(GL_COLOR_BUFFER_BIT)
 
-		scheduledCommands.map(x => x._2).toSeq.sortBy(x => x.z).foreach(x => traverseAndDraw(x.root, projectionMatrix))
+		scheduledCommands.map(x => x._2).toSeq.sortBy(x => x.z).foreach(x => traverseAndDraw(x.root, guiMatrix))
 
 		checkGLError
 
 		Display.update()
-	}
-
-	def calcChildMatrix(current: Matrix4f, x: Double, y: Double, r: Double, h: Double, w: Double): Matrix4f = {
-		val nodeMatrix = new Matrix4f()
-		nodeMatrix.translate(new Vector2f(x.floatValue, y.floatValue))
-		nodeMatrix.rotate(r.floatValue, new Vector3f(0, 0, 1))
-		nodeMatrix.scale(new Vector3f(w.floatValue, h.floatValue, 1))
-
-		val childMatrix = new Matrix4f()
-		Matrix4f.mul(current, nodeMatrix, childMatrix)
-
-		childMatrix
 	}
 
 	def traverseAndLoad(node: DrawNode) {
@@ -213,53 +219,11 @@ class Gui extends Actor {
 		}
 	}
 
-	def traverseAndTest(node: DrawNode, matrix: Matrix4f): Option[DrawNode] = {
-		node match {
-			case Collection(children) => {
-				val tmp = children.flatMap(child => traverseAndTest(child, matrix))
-				tmp.size match {
-					case 0 => None
-					case _ => Some(Collection(tmp))
-				}
-			}
-			case Transform(child, x, y, r, h, w) => {
-				val childMatrix = calcChildMatrix(matrix, x, y, r, h, w)
-
-				traverseAndTest(child, childMatrix) match {
-					case Some(tmp) => Some(Transform(tmp, x, y, r, h, w))
-					case None => None
-				}
-			}
-			case Tile(id) => {
-				val result = new Matrix4f
-				Matrix4f.mul(matrix, viewTestMatrix, result)
-
-				val xValues = List(result.m00, result.m10, result.m20, result.m30)
-				val xMin = xValues.min
-				val xMax = xValues.max
-
-				if ((xMin < testRadius) && (xMax > -testRadius)) {
-					val yValues = List(result.m01, result.m11, result.m21, result.m31)
-					val yMin = yValues.min
-					val yMax = yValues.max
-
-					if ((yMin < testRadius) && (yMax > -testRadius)) {
-						Some(Tile(id))
-					} else {
-						None
-					}
-				} else {
-					None
-				}
-			}
-		}
-	}
-
 	def traverseAndDraw(node: DrawNode, matrix: Matrix4f) {
 		node match {
 			case Collection(children) => children foreach (child => traverseAndDraw(child, matrix))
 			case Transform(child, x, y, r, h, w) => {
-				val childMatrix = calcChildMatrix(matrix, x, y, r, h, w)
+				val childMatrix = GuiUtils.calcChildMatrix(matrix, x, y, r, h, w)
 				traverseAndDraw(child, childMatrix)
 			}
 			case Tile(id) => {
@@ -336,15 +300,102 @@ class Gui extends Actor {
 		textureId
 	}
 
-	def buildProjectionMatrix(): Matrix4f = {
-		val matrix = new Matrix4f
+	def buildGuiMatrix(): Matrix4f = {
+		val fowMatrix = new Matrix4f
+		fowMatrix.translate(new Vector2f(0, (1 - 2 / MathUtils.Phi).floatValue))
+
+		val projectionMatrix = new Matrix4f
 		val scale = 50
+		projectionMatrix.m00 = 2 / dimWidth.floatValue * scale
+		projectionMatrix.m11 = 2 / dimHeight.floatValue * scale
 
-		matrix.setIdentity()
-		matrix.m00 = 2 / dimWidth.floatValue * scale
-		matrix.m11 = 2 / dimHeight.floatValue * scale
+		val cameraMatrix = new Matrix4f
+		cameraMatrix.rotate(-playerRotation.a.floatValue, new Vector3f(0, 0, 1))
+		cameraMatrix.translate(new Vector2f(-playerPosition.x.floatValue, -playerPosition.y.floatValue))
 
-		matrix
+		val result = new Matrix4f
+		Matrix4f.mul(fowMatrix, projectionMatrix, result)
+		Matrix4f.mul(result, cameraMatrix, result)
+
+		result
+	}
+
+	def checkGLError {
+		glGetError() match {
+			case GL_NO_ERROR => None
+			case i => throw new RuntimeException(s"glError: ${gluErrorString(i)}")
+		}
+	}
+}
+
+object ViewTesterCommands {
+	case class ChangeGuiMatrix(matrix: Matrix4f)
+	case class DeleteOne(path: ActorPath)
+	case class DeleteOneResult(path: ActorPath)
+	case class TestAll(all: HashMap[ActorPath, DrawCommand])
+	case class TestAllResult(result: HashMap[ActorPath, DrawCommand])
+	case class TestOne(path: ActorPath, command: DrawCommand)
+	case class TestOneResult(path: ActorPath, command: DrawCommand)
+}
+
+class ViewTester(var guiMatrix: Matrix4f) extends Actor {
+	val testRadius = 2.0f
+	val viewTestMatrix = buildViewTestMatrix
+
+	def receive = {
+		case ViewTesterCommands.ChangeGuiMatrix(matrix) => guiMatrix = matrix
+		case ViewTesterCommands.DeleteOne(path) => sender ! ViewTesterCommands.DeleteOneResult(path)
+		case ViewTesterCommands.TestAll(all) => {
+			val iterable = all
+				.map(x => (x._1, x._2.z, traverseAndTest(x._2.root, guiMatrix)))
+				.filter(x => x._3.isDefined)
+				.map(x => (x._1, DrawCommand(z = x._2, root = x._3.get)))
+			val map = HashMap(iterable.toSeq: _*)
+			sender ! ViewTesterCommands.TestAllResult(map)
+		}
+		case ViewTesterCommands.TestOne(path, command) => {
+			val result = traverseAndTest(command.root, guiMatrix);
+			if (result.isDefined) {
+				sender ! ViewTesterCommands.TestOneResult(path, command.copy(root = result.get))
+			} else {
+				sender ! ViewTesterCommands.DeleteOneResult(path)
+			}
+		}
+	}
+
+	def traverseAndTest(node: DrawNode, matrix: Matrix4f): Option[DrawNode] = {
+		node match {
+			case Collection(children) => {
+				val tmp = children.flatMap(child => traverseAndTest(child, matrix))
+				tmp.size match {
+					case 0 => None
+					case _ => Some(Collection(tmp))
+				}
+			}
+			case Transform(child, x, y, r, h, w) => {
+				val childMatrix = GuiUtils.calcChildMatrix(matrix, x, y, r, h, w)
+
+				traverseAndTest(child, childMatrix) match {
+					case Some(tmp) => Some(Transform(tmp, x, y, r, h, w))
+					case None => None
+				}
+			}
+			case Tile(id) => {
+				val result = new Matrix4f
+				Matrix4f.mul(matrix, viewTestMatrix, result)
+
+				val xValues = List(result.m00, result.m10, result.m20, result.m30)
+				val yValues = List(result.m01, result.m11, result.m21, result.m31)
+				val qDistances = (xValues zip yValues) map (c => c._1 * c._1 + c._2 * c._2)
+				val viewables = qDistances filter (_ <= testRadius * testRadius)
+
+				if (viewables.size > 0) {
+					Some(Tile(id))
+				} else {
+					None
+				}
+			}
+		}
 	}
 
 	def buildViewTestMatrix(): Matrix4f = {
@@ -372,11 +423,18 @@ class Gui extends Actor {
 
 		vectors
 	}
+}
 
-	def checkGLError {
-		glGetError() match {
-			case GL_NO_ERROR => None
-			case i => throw new RuntimeException(s"glError: ${gluErrorString(i)}")
-		}
+object GuiUtils {
+	def calcChildMatrix(current: Matrix4f, x: Double, y: Double, r: Double, h: Double, w: Double): Matrix4f = {
+		val nodeMatrix = new Matrix4f()
+		nodeMatrix.translate(new Vector2f(x.floatValue, y.floatValue))
+		nodeMatrix.rotate(r.floatValue, new Vector3f(0, 0, 1))
+		nodeMatrix.scale(new Vector3f(w.floatValue, h.floatValue, 1))
+
+		val childMatrix = new Matrix4f()
+		Matrix4f.mul(current, nodeMatrix, childMatrix)
+
+		childMatrix
 	}
 }

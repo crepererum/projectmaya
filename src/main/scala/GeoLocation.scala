@@ -6,12 +6,7 @@ object GeoLocation {
 		val xNorm = pos.x / RADIUS_EARTH
 		val yNorm = pos.y / RADIUS_EARTH
 		val zeta = math.sqrt(xNorm * xNorm + yNorm * yNorm)
-		val alpha =
-			if (math.abs(yNorm) < EPSILON) (math.Pi / 2.0 * math.signum(xNorm))
-			else if (yNorm > 0) math.atan(xNorm / yNorm)
-			else if (math.abs(xNorm) < EPSILON) math.Pi
-			else if (xNorm > 0) (math.Pi / 2 + math.atan(-yNorm / xNorm))
-			else (-math.Pi / 2 - math.atan(yNorm / xNorm))
+		val alpha = MathUtils.restoreAngle(xNorm, yNorm, EPSILON, false)
 		val radLatitude = math.asin(math.cos(alpha) * math.cos(root.radLatitude) * math.sin(zeta) + math.sin(root.radLatitude) * math.cos(zeta))
 		val radLongitude =
 			if ((math.abs(alpha) < EPSILON) || ((math.abs(math.Pi - alpha) < EPSILON)) || ((math.abs(-math.Pi - alpha) < EPSILON))) root.radLongitude

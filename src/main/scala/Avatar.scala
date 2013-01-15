@@ -4,6 +4,7 @@ import scala.concurrent.duration.FiniteDuration
 
 object AvatarCommands {
 	case object GetPosition
+	case object GetRotation
 	case object MoveBackwardBegin
 	case object MoveBackwardEnd
 	case object MoveForwardBegin
@@ -14,9 +15,9 @@ object AvatarCommands {
 	case object RotateRightEnd
 }
 
-class Avatar(var pos: Position, var rotation: Double) extends Actor {
+class Avatar(var pos: Position, var rotation: Rotation) extends Actor {
 	val rotatationSpeed = 0.2
-	val walkSpeed = 1.0
+	val walkSpeed = 3.0
 	var rotateLeft = false
 	var rotateRight = false
 	var walkForward = false
@@ -25,6 +26,7 @@ class Avatar(var pos: Position, var rotation: Double) extends Actor {
 	def receive = {
 		case GlobalWorldTick(duration) => step(duration)
 		case AvatarCommands.GetPosition => sender ! pos
+		case AvatarCommands.GetRotation => sender ! rotation
 		case AvatarCommands.MoveBackwardBegin => walkBackward = true
 		case AvatarCommands.MoveBackwardEnd => walkBackward = false
 		case AvatarCommands.MoveForwardBegin => walkForward = true
@@ -40,7 +42,7 @@ class Avatar(var pos: Position, var rotation: Double) extends Actor {
 				y = pos.y,
 				h = 0.4,
 				w = 0.35,
-				r = rotation,
+				r = rotation.a,
 				child = new Tile(id = "foo")))
 	}
 
@@ -48,29 +50,23 @@ class Avatar(var pos: Position, var rotation: Double) extends Actor {
 		val seconds = duration.toMillis.toDouble / 1000
 
 		if (rotateLeft) {
-			rotation += seconds * 2 * math.Pi * rotatationSpeed
+			rotation = new Rotation(rotation.a + seconds * 2 * math.Pi * rotatationSpeed)
 		}
 		if (rotateRight) {
-			rotation -= seconds * 2 * math.Pi * rotatationSpeed
-		}
-		if (rotation >= 2 * math.Pi) {
-			rotation -= (rotation / (2 * math.Pi)).toInt * 2 * math.Pi
-		}
-		if (rotation < 0) {
-			rotation -= (rotation / (2 * math.Pi) - 1).toInt * 2 * math.Pi
+			rotation = new Rotation(rotation.a - seconds * 2 * math.Pi * rotatationSpeed)
 		}
 
 		if (walkForward) {
 			pos = Position(
-				x = pos.x + seconds * walkSpeed * Math.cos(rotation),
-				y = pos.y + seconds * walkSpeed * Math.sin(rotation))
+				x = pos.x - seconds * walkSpeed * Math.sin(rotation.a),
+				y = pos.y + seconds * walkSpeed * Math.cos(rotation.a))
 		}
 		if (walkBackward) {
 			pos = Position(
-				x = pos.x - seconds * walkSpeed * Math.cos(rotation),
-				y = pos.y - seconds * walkSpeed * Math.sin(rotation))
+				x = pos.x + seconds * walkSpeed * Math.sin(rotation.a),
+				y = pos.y - seconds * walkSpeed * Math.cos(rotation.a))
 		}
 
-		println(s"x=${pos.x} y=${pos.y} r=${rotation}")
+		println(s"x=${pos.x} y=${pos.y} r=${rotation.a}")
 	}
 }
