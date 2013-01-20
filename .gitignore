@@ -1,4 +1,5 @@
 # sbt related files + build results
+deploy/
 target/
 
 # eclipse files
