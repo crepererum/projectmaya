@@ -9,5 +9,6 @@ package net.crepererum.projectmaya {
 
 		case object CreateYourDrawCommand
 		case object RemoveDrawCommand
+		case object UncacheYourDrawCommand
 	}
 }

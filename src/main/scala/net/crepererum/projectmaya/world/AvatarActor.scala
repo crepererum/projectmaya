@@ -71,6 +71,10 @@ package net.crepererum.projectmaya.world {
 					x = pos.x + seconds * walkSpeed * Math.sin(rotation.a),
 					y = pos.y - seconds * walkSpeed * Math.cos(rotation.a))
 			}
+
+			context.parent ! WorldCommands.SetBounds(
+				Position(pos.x - 1, pos.y - 1),
+				Position(pos.x + 1, pos.y + 1))
 		}
 	}
 }

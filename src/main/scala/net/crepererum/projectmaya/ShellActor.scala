@@ -23,7 +23,7 @@ package net.crepererum.projectmaya {
 		val pin = generatePin
 
 		def receive = {
-			case IO.Listening(server, address) => println(s"Shell loaded @ $address (PIN: $pin)")
+			case IO.Listening(server, address) => println(s"Shell loaded @ $address (PIN: $pin )")
 			case IO.NewClient(server) => {
 				val socket = server.accept()
 				state(socket) flatMap (_ => ShellReader.process(socket, context.system, pin))
@@ -36,10 +36,10 @@ package net.crepererum.projectmaya {
 		}
 
 		def generatePin = {
-			val pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+			val pool = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 			val bytes = new Array[Byte](16)
 			random nextBytes bytes
-			val carray = bytes map (byte => pool charAt (byte & (pool.length() - 1)))
+			val carray = bytes map (byte => pool charAt (byte & 63))
 			new String(carray)
 		}
 	}

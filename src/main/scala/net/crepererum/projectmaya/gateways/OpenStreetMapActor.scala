@@ -7,6 +7,7 @@ import net.crepererum.projectmaya.Position
 import net.crepererum.projectmaya.TimerCommands._
 import net.crepererum.projectmaya.world.AvatarCommands
 import net.crepererum.projectmaya.world.WayActor
+import net.crepererum.projectmaya.world.WayCommands
 import net.crepererum.projectmaya.world.WorldCommands
 
 import java.net.URL
@@ -30,6 +31,7 @@ package net.crepererum.projectmaya.gateways {
 		val playerActor = context.actorFor("../../World/Player")
 		val timerActor = context.actorFor("../../Timer")
 		val fetchedSectors = HashSet.empty[(Integer, Integer)]
+		val createdWays = HashSet.empty[Integer]
 		val root = GeoLocation(latitude = 49.0109, longitude = 8.4042)
 		val nodes = HashMap.empty[Integer, Position]
 
@@ -54,7 +56,7 @@ package net.crepererum.projectmaya.gateways {
 					val urlString = s"http://api.openstreetmap.org/api/0.6/map?bbox=${sectorCoordString(geoBegin.longitude)},${sectorCoordString(geoBegin.latitude)},${sectorCoordString(geoEnd.longitude)},${sectorCoordString(geoEnd.latitude)}"
 					val xml = XML.load(new URL(urlString))
 
-					parseXML(xml, s"${x}_${y}")
+					parseXML(xml)
 
 					fetchedSectors += ((x, y))
 				}
@@ -69,7 +71,7 @@ package net.crepererum.projectmaya.gateways {
 			timerActor ! StopTicks
 		}
 
-		def parseXML(xml: Elem, sectorId: String) {
+		def parseXML(xml: Elem) {
 			scala.xml.Utility.trim(xml) match {
 				case <osm>{ rootElements @ _* }</osm> => rootElements.foreach(rootElement => rootElement match {
 					case <bounds>{ boundsParams @ _* }</bounds> => Unit // ignore
@@ -88,8 +90,16 @@ package net.crepererum.projectmaya.gateways {
 							.filter(wayParam => wayParam.label == "nd")
 							.map(nd => (nd \ "@ref").text.toInt.asInstanceOf[Integer])
 							.map(refId => nodes(refId))
-						val id = s"way_${sectorId}_${(rootElement \ "@id").text}"
-						worldActor ! WorldCommands.CreateNewObject(Props(new WayActor(points)), id)
+						val pointMap = Map((points zip points.tail): _*)
+						val number = (rootElement \ "@id").text.toInt
+						val id = s"way_${number}"
+
+						if (createdWays.contains(number)) {
+							context.actorFor(s"../../World/$id") ! WayCommands.Extend(pointMap)
+						} else {
+							worldActor ! WorldCommands.CreateNewObject(Props(new WayActor(pointMap)), id)
+							createdWays += number
+						}
 					}
 					case <relation>{ relationParams @ _* }</relation> => Unit // ignore
 					case _ => println(s"Ignore element ${rootElement.label}")

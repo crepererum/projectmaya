@@ -10,6 +10,7 @@ import net.crepererum.projectmaya.Position
 import net.crepererum.projectmaya.Rotation
 import net.crepererum.projectmaya.TimerCommands._
 import net.crepererum.projectmaya.world.AvatarCommands
+import net.crepererum.projectmaya.world.WorldCommands
 
 import java.nio.ByteBuffer
 
@@ -36,8 +37,10 @@ import scala.io.Source
 
 package net.crepererum.projectmaya.client {
 	class GuiActor extends Actor {
+		val queryRange = 40
 		val timerActor = context.actorFor("../../Timer")
 		val playerActor = context.actorFor("../../World/Player")
+		val worldActor = context.actorFor("../../World")
 		val textures = HashMap.empty[String, Integer]
 		val commands = HashMap.empty[ActorPath, DrawCommand]
 		var scheduledCommands = HashMap.empty[ActorPath, DrawCommand]
@@ -51,6 +54,7 @@ package net.crepererum.projectmaya.client {
 		var vertexArrayId = 0
 		var vertexBufferId = 0
 		var tickRound = 0
+		var roundCounter = 0
 		var playerPosition = Position(0, 0)
 		var playerRotation = new Rotation(0)
 		var guiMatrix = buildGuiMatrix
@@ -62,12 +66,16 @@ package net.crepererum.projectmaya.client {
 					context.system.shutdown
 				} else {
 					if (tickRound == 0) {
-						testerActor ! DNodeOptimizerCommands.TestAll(commands)
+						roundCounter += 1
+						testerActor ! DNodeOptimizerCommands.TestAll(roundCounter, commands)
 					}
 
 					redraw
 
-					context.actorSelection("../../World/*") ! CreateYourDrawCommand
+					worldActor ! WorldCommands.RectBroadcast(
+						Position(playerPosition.x - queryRange, playerPosition.y - queryRange),
+						Position(playerPosition.x + queryRange, playerPosition.y + queryRange),
+						CreateYourDrawCommand)
 					playerActor ! AvatarCommands.GetPosition
 					playerActor ! AvatarCommands.GetRotation
 
@@ -78,7 +86,7 @@ package net.crepererum.projectmaya.client {
 				traverseAndLoad(command.root)
 				commands += (sender.path -> command)
 
-				testerActor ! DNodeOptimizerCommands.TestOne(sender.path, command)
+				testerActor ! DNodeOptimizerCommands.TestOne(roundCounter, sender.path, command)
 			}
 			case RemoveDrawCommand => {
 				if (commands.contains(sender.path)) {
@@ -87,29 +95,35 @@ package net.crepererum.projectmaya.client {
 						scheduledCommands -= sender.path
 					}
 				}
-				testerActor ! DNodeOptimizerCommands.DeleteOne(sender.path)
+				testerActor ! DNodeOptimizerCommands.DeleteOne(roundCounter, sender.path)
 			}
 			case pos: Position => {
 				playerPosition = pos
 				guiMatrix = buildGuiMatrix
-				testerActor ! DNodeOptimizerCommands.ChangeGuiMatrix(guiMatrix)
+				testerActor ! DNodeOptimizerCommands.ChangeGuiMatrix(roundCounter, guiMatrix)
 			}
 			case rot: Rotation => {
 				playerRotation = rot
 				guiMatrix = buildGuiMatrix
-				testerActor ! DNodeOptimizerCommands.ChangeGuiMatrix(guiMatrix)
+				testerActor ! DNodeOptimizerCommands.ChangeGuiMatrix(roundCounter, guiMatrix)
 			}
-			case DNodeOptimizerCommands.DeleteOneResult(path) => {
+			case DNodeOptimizerCommands.DeleteOneResult(stateId, path) => {
 				if (scheduledCommands.contains(path)) {
 					scheduledCommands -= path
 				}
 			}
-			case DNodeOptimizerCommands.TestAllResult(all) => {
+			case DNodeOptimizerCommands.TestAllResult(stateId, all) => {
 				scheduledCommands = all.filter(x => commands.contains(x._1))
 			}
-			case DNodeOptimizerCommands.TestOneResult(path, command) => {
+			case DNodeOptimizerCommands.TestOneResult(stateId, path, command) => {
 				if (commands.contains(path)) {
 					scheduledCommands += (path -> command)
+				}
+			}
+			case DNodeOptimizerCommands.Uncache(stateId, todo) => {
+				if (stateId == roundCounter) {
+					commands --= todo
+					todo foreach (path => context.system.actorFor(path) ! UncacheYourDrawCommand)
 				}
 			}
 		}
@@ -337,55 +351,69 @@ package net.crepererum.projectmaya.client {
 	}
 
 	object DNodeOptimizerCommands {
-		case class ChangeGuiMatrix(matrix: Matrix4f)
-		case class DeleteOne(path: ActorPath)
-		case class DeleteOneResult(path: ActorPath)
-		case class TestAll(all: HashMap[ActorPath, DrawCommand])
-		case class TestAllResult(result: HashMap[ActorPath, DrawCommand])
-		case class TestOne(path: ActorPath, command: DrawCommand)
-		case class TestOneResult(path: ActorPath, command: DrawCommand)
+		case class ChangeGuiMatrix(stateId: Integer, matrix: Matrix4f)
+		case class DeleteOne(stateId: Integer, path: ActorPath)
+		case class DeleteOneResult(stateId: Integer, path: ActorPath)
+		case class TestAll(stateId: Integer, all: HashMap[ActorPath, DrawCommand])
+		case class TestAllResult(stateId: Integer, result: HashMap[ActorPath, DrawCommand])
+		case class TestOne(stateId: Integer, path: ActorPath, command: DrawCommand)
+		case class TestOneResult(stateId: Integer, path: ActorPath, command: DrawCommand)
+		case class Uncache(stateId: Integer, commands: Iterable[ActorPath])
 	}
 
 	class DNodeOptimizerActor(var guiMatrix: Matrix4f) extends Actor {
+		val cacheRadius = 4.0f
 		val testRadius = 2.0f
 		val viewTestMatrix = buildViewTestMatrix
 
 		def receive = {
-			case DNodeOptimizerCommands.ChangeGuiMatrix(matrix) => guiMatrix = matrix
-			case DNodeOptimizerCommands.DeleteOne(path) => sender ! DNodeOptimizerCommands.DeleteOneResult(path)
-			case DNodeOptimizerCommands.TestAll(all) => {
-				val iterable = all
+			case DNodeOptimizerCommands.ChangeGuiMatrix(_, matrix) => guiMatrix = matrix
+			case DNodeOptimizerCommands.DeleteOne(stateId, path) => sender ! DNodeOptimizerCommands.DeleteOneResult(stateId, path)
+			case DNodeOptimizerCommands.TestAll(stateId, all) => {
+				val tmp = all
 					.map(x => (x._1, x._2.z, traverseAndTest(x._2.root, guiMatrix)))
-					.filter(x => x._3.isDefined)
-					.map(x => (x._1, DrawCommand(z = x._2, root = x._3.get)))
+
+				val iterable = tmp.filter(x => x._3._1.isDefined)
+					.map(x => (x._1, DrawCommand(z = x._2, root = x._3._1.get)))
 				val map = HashMap(iterable.toSeq: _*)
-				sender ! DNodeOptimizerCommands.TestAllResult(map)
+				sender ! DNodeOptimizerCommands.TestAllResult(stateId, map)
+
+				val uncache = tmp.filter(x => x._3._2 > cacheRadius * cacheRadius)
+					.map(x => x._1)
+				if (uncache.size > 0) {
+					sender ! DNodeOptimizerCommands.Uncache(stateId, uncache)
+				}
 			}
-			case DNodeOptimizerCommands.TestOne(path, command) => {
+			case DNodeOptimizerCommands.TestOne(stateId, path, command) => {
 				val result = traverseAndTest(command.root, guiMatrix);
-				if (result.isDefined) {
-					sender ! DNodeOptimizerCommands.TestOneResult(path, command.copy(root = result.get))
+				if (result._1.isDefined) {
+					sender ! DNodeOptimizerCommands.TestOneResult(stateId, path, command.copy(root = result._1.get))
 				} else {
-					sender ! DNodeOptimizerCommands.DeleteOneResult(path)
+					sender ! DNodeOptimizerCommands.DeleteOneResult(stateId, path)
+				}
+				if (result._2 > cacheRadius * cacheRadius) {
+					sender ! DNodeOptimizerCommands.Uncache(stateId, Seq(path))
 				}
 			}
 		}
 
-		def traverseAndTest(node: DrawNode, matrix: Matrix4f): Option[DrawNode] = {
+		def traverseAndTest(node: DrawNode, matrix: Matrix4f): (Option[DrawNode], Double) = {
 			node match {
 				case Collection(children) => {
-					val tmp = children.flatMap(child => traverseAndTest(child, matrix))
-					tmp.size match {
-						case 0 => None
-						case _ => Some(Collection(tmp))
+					val tmp = children.map(child => traverseAndTest(child, matrix))
+					val dist = tmp.map(x => x._2).min
+					val filtered = tmp.flatMap(x => x._1)
+					filtered.size match {
+						case 0 => (None, dist)
+						case _ => (Some(Collection(filtered)), dist)
 					}
 				}
 				case Transform(child, x, y, r, h, w) => {
 					val childMatrix = GuiUtils.calcChildMatrix(matrix, x, y, r, h, w)
 
 					traverseAndTest(child, childMatrix) match {
-						case Some(tmp) => Some(Transform(tmp, x, y, r, h, w))
-						case None => None
+						case (Some(tmp), dist) => (Some(Transform(tmp, x, y, r, h, w)), dist)
+						case (None, dist) => (None, dist)
 					}
 				}
 				case Tile(id) => {
@@ -396,11 +424,12 @@ package net.crepererum.projectmaya.client {
 					val yValues = List(result.m01, result.m11, result.m21, result.m31)
 					val qDistances = (xValues zip yValues) map (c => c._1 * c._1 + c._2 * c._2)
 					val viewables = qDistances filter (_ <= testRadius * testRadius)
+					val dist = qDistances.min
 
 					if (viewables.size > 0) {
-						Some(Tile(id))
+						(Some(Tile(id)), dist)
 					} else {
-						None
+						(None, dist)
 					}
 				}
 			}
